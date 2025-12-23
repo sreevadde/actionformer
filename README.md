@@ -1,15 +1,59 @@
 # ActionFormer: Localizing Moments of Actions with Transformers
 
-## Introduction
-This code repo implements Actionformer, one of the first Transformer-based model for temporal action localization --- detecting the onsets and offsets of action instances and recognizing their action categories. Without bells and whistles, ActionFormer achieves 71.0% mAP at tIoU=0.5 on THUMOS14, outperforming the best prior model by 14.1 absolute percentage points and crossing the 60% mAP for the first time. Further, ActionFormer demonstrates strong results on ActivityNet 1.3 (36.56% average mAP) and the more challenging EPIC-Kitchens 100 (+13.5% average mAP over prior works). Our paper is accepted to ECCV 2022 and an arXiv version can be found at [this link](https://arxiv.org/abs/2202.07925).
+> **This is an enhanced fork of [ActionFormer](https://github.com/happyharrycn/actionformer_release) with multi-GPU training and modernized transformer architecture.**
 
-In addition, ActionFormer is the backbone for many winning solutions in the Ego4D Moment Queries Challenge 2022. Our submission in particular is ranked 2nd with a record 21.76% average mAP and 42.54% Recall@1x, tIoU=0.5, nearly three times higher than the official baseline. An arXiv version of our tech report can be found at [this link](https://arxiv.org/abs/2211.09074). We invite our audience to try out the code.
+## Fork Enhancements
+
+This fork extends the original ActionFormer with:
+
+### Multi-GPU Training (DDP)
+- **DistributedDataParallel** for efficient multi-GPU training via `torchrun`
+- **Automatic Mixed Precision (AMP)** for ~2x faster training
+- **Gradient Accumulation** for larger effective batch sizes
+- **Distributed Validation** during training
+- **Multi-node Support** for cluster training
+
+### Modernized Transformer Architecture (v2)
+| Component | Description | Benefit |
+|-----------|-------------|---------|
+| **Flash Attention** | PyTorch 2.0+ optimized attention | 2-4x faster, O(T) memory |
+| **RoPE** | Rotary Position Embeddings | Better length generalization |
+| **RMSNorm** | Root Mean Square normalization | Faster than LayerNorm |
+| **SwiGLU** | Gated Linear Unit FFN | Better quality per parameter |
+| **GQA** | Grouped Query Attention | Faster inference |
+
+---
+
+## Original Implementation
+
+This fork is based on the original ActionFormer by Zhang et al. (ECCV 2022):
+
+- **Original Repository**: [happyharrycn/actionformer_release](https://github.com/happyharrycn/actionformer_release)
+- **Paper**: [ActionFormer: Localizing Moments of Actions with Transformers](https://arxiv.org/abs/2202.07925)
+- **Authors**: Chen-Lin Zhang, Jianxin Wu, Yin Li
+
+If you use this code, please cite the original paper:
+```bibtex
+@inproceedings{zhang2022actionformer,
+  title={ActionFormer: Localizing Moments of Actions with Transformers},
+  author={Zhang, Chen-Lin and Wu, Jianxin and Li, Yin},
+  booktitle={European Conference on Computer Vision},
+  pages={492-510},
+  year={2022}
+}
+```
+
+---
+
+## Introduction
+
+ActionFormer is one of the first Transformer-based models for temporal action localization --- detecting the onsets and offsets of action instances and recognizing their action categories. Without bells and whistles, ActionFormer achieves 71.0% mAP at tIoU=0.5 on THUMOS14, outperforming the best prior model by 14.1 absolute percentage points. Further, ActionFormer demonstrates strong results on ActivityNet 1.3 (36.56% average mAP) and EPIC-Kitchens 100 (+13.5% average mAP over prior works).
 
 <div align="center">
   <img src="teaser.jpg" width="600px"/>
 </div>
 
-Specifically, we adopt a minimalist design and develop a Transformer based model for temporal action localization, inspired by the recent success of Transformers in NLP and vision. Our method, illustrated in the figure, adapts local self-attention to model temporal context in untrimmed videos, classifies every moment in an input video, and regresses their corresponding action boundaries. The result is a deep model that is trained using standard classification and regression loss, and can localize moments of actions in a single shot, without using action proposals or pre-defined anchor windows.
+The model adapts local self-attention to model temporal context in untrimmed videos, classifies every moment in an input video, and regresses their corresponding action boundaries. The result is a deep model trained using standard classification and regression loss that can localize moments of actions in a single shot.
 
 **Related projects**:
 > [**SnAG: Scalable and Accurate Video Grounding**](https://arxiv.org/abs/2404.02257) <br>
@@ -87,34 +131,14 @@ torchrun --nproc_per_node=4 ./train_ddp.py ./configs/thumos_i3d.yaml --output re
 # With AMP (mixed precision) for ~2x faster training
 torchrun --nproc_per_node=4 ./train_ddp.py ./configs/thumos_i3d.yaml --amp --output reproduce
 
-# With gradient accumulation (effective_batch = batch_size × accum_steps × num_gpus)
-torchrun --nproc_per_node=4 ./train_ddp.py ./configs/thumos_i3d.yaml --accum-steps 2 --output reproduce
-
 # Full example with all features
 torchrun --nproc_per_node=4 ./train_ddp.py ./configs/thumos_i3d.yaml \
     --amp --accum-steps 2 --eval-freq 5 --output reproduce
 ```
 
-DDP features:
-- Automatic learning rate scaling by `num_gpus × accum_steps`
-- AMP (Automatic Mixed Precision) with `--amp` for faster training
-- Gradient accumulation with `--accum-steps N` for larger effective batch sizes
-- Distributed validation with `--eval-freq N`
-- Multi-node training supported via `torchrun`
+**[Optional] Modernized Transformer (v2)**
 
-**[Optional] Modernized Transformer Architecture (v2)**
-
-This fork includes a modernized transformer backbone (`convTransformerv2`) with recent advances:
-
-| Feature | Description | Benefit |
-|---------|-------------|---------|
-| **Flash Attention** | PyTorch 2.0+ `scaled_dot_product_attention` | 2-4x faster, O(T) memory |
-| **RoPE** | Rotary Position Embeddings | Better length generalization |
-| **RMSNorm** | Root Mean Square normalization | Faster than LayerNorm |
-| **SwiGLU** | Gated Linear Unit FFN | Better quality per parameter |
-| **GQA** | Grouped Query Attention | Faster inference |
-
-To use the v2 backbone, update your config:
+To use the v2 backbone with Flash Attention, RoPE, RMSNorm, and SwiGLU:
 ```yaml
 model:
   backbone_type: convTransformerv2
@@ -123,7 +147,6 @@ model:
     use_flash_attn: true
     use_swiglu: true
     use_rms_norm: true
-    use_abs_pe: false  # RoPE handles position
 ```
 
 * [Optional] Monitor the training using TensorBoard
@@ -465,23 +488,23 @@ python ./eval.py ./configs/ego4d_omnivore_egovlp.yaml ./pretrained/ego4d_omnivor
 Work in progress. Stay tuned.
 
 ## Contact
-Yin Li (yin.li@wisc.edu)
+- **Original Authors**: Yin Li (yin.li@wisc.edu)
+- **This Fork**: [sreevadde/actionformer_release](https://github.com/sreevadde/actionformer_release)
 
 ## References
-If you are using our code, please consider citing our paper.
-```
+
+Please cite the original ActionFormer paper:
+```bibtex
 @inproceedings{zhang2022actionformer,
   title={ActionFormer: Localizing Moments of Actions with Transformers},
   author={Zhang, Chen-Lin and Wu, Jianxin and Li, Yin},
   booktitle={European Conference on Computer Vision},
-  series={LNCS},
-  volume={13664},
   pages={492-510},
   year={2022}
 }
 ```
 
-If you cite our results on Ego4D, please consider citing our tech report in addition to the main paper.
+If you cite results on Ego4D, please also cite the tech report:
 ```
 @article{mu2022actionformerego4d,
   title={Where a Strong Backbone Meets Strong Features -- ActionFormer for Ego4D Moment Queries Challenge},

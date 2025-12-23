@@ -1,10 +1,24 @@
 # ActionFormer: Localizing Moments of Actions with Transformers
 
-> **This is an enhanced fork of [ActionFormer](https://github.com/happyharrycn/actionformer_release) with multi-GPU training and modernized transformer architecture.**
+> **Enhanced fork of [ActionFormer](https://github.com/happyharrycn/actionformer_release) with multi-GPU training and modern transformer architecture.**
 
 ## Fork Enhancements
 
-This fork extends the original ActionFormer with:
+| Feature | Description | Docs |
+|---------|-------------|------|
+| **Multi-GPU Training** | DDP, AMP, gradient accumulation | [Guide](docs/MULTI_GPU_TRAINING.md) |
+| **Transformer v2** | Flash Attention, RoPE, RMSNorm, SwiGLU | [Guide](docs/TRANSFORMER_V2.md) |
+| **Use Cases** | Configuration recommendations | [Guide](docs/USE_CASES.md) |
+
+### Quick Start
+
+```bash
+# Multi-GPU training with all optimizations
+torchrun --nproc_per_node=4 train_ddp.py configs/thumos_i3d.yaml --amp --output my_exp
+
+# Test the improvements
+python test_improvements.py
+```
 
 ### Multi-GPU Training (DDP)
 - **DistributedDataParallel** for efficient multi-GPU training via `torchrun`
@@ -18,9 +32,21 @@ This fork extends the original ActionFormer with:
 |-----------|-------------|---------|
 | **Flash Attention** | PyTorch 2.0+ optimized attention | 2-4x faster, O(T) memory |
 | **RoPE** | Rotary Position Embeddings | Better length generalization |
-| **RMSNorm** | Root Mean Square normalization | Faster than LayerNorm |
+| **RMSNorm** | Root Mean Square normalization | 1.8x faster than LayerNorm |
 | **SwiGLU** | Gated Linear Unit FFN | Better quality per parameter |
 | **GQA** | Grouped Query Attention | Faster inference |
+
+### v2 Configuration
+
+```yaml
+model:
+  backbone_type: convTransformerv2
+  backbone:
+    use_rope: true
+    use_flash_attn: true
+    use_swiglu: true
+    use_rms_norm: true
+```
 
 ---
 

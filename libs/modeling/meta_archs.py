@@ -6,7 +6,7 @@ from torch.nn import functional as F
 
 from .models import register_meta_arch, make_backbone, make_neck, make_generator
 from .blocks import MaskedConv1D, Scale, LayerNorm
-from .losses import ctr_diou_loss_1d, sigmoid_focal_loss
+from .losses import ctr_diou_loss_1d, ctr_eiou_loss_1d, sigmoid_focal_loss
 
 from ..utils import batched_nms
 
@@ -87,6 +87,169 @@ class PtTransformerClsHead(nn.Module):
 
         # fpn_masks remains the same
         return out_logits
+
+
+class PtTransformerClsHeadv2(nn.Module):
+    """
+    Enhanced 1D Conv heads for classification with skip connections.
+    Deeper architecture (4-5 layers) with residual connections for better
+    feature propagation and gradient flow.
+    """
+    def __init__(
+        self,
+        input_dim,
+        feat_dim,
+        num_classes,
+        prior_prob=0.01,
+        num_layers=4,
+        kernel_size=3,
+        act_layer=nn.ReLU,
+        with_ln=True,
+        empty_cls=[]
+    ):
+        super().__init__()
+        self.act = act_layer()
+        self.num_layers = num_layers
+
+        # input projection
+        self.input_proj = MaskedConv1D(
+            input_dim, feat_dim, 1, stride=1, padding=0, bias=(not with_ln)
+        )
+        self.input_norm = LayerNorm(feat_dim) if with_ln else nn.Identity()
+
+        # build the deeper head with skip connections
+        self.head = nn.ModuleList()
+        self.norm = nn.ModuleList()
+        for idx in range(num_layers - 1):
+            self.head.append(
+                MaskedConv1D(
+                    feat_dim, feat_dim, kernel_size,
+                    stride=1,
+                    padding=kernel_size // 2,
+                    bias=(not with_ln)
+                )
+            )
+            if with_ln:
+                self.norm.append(LayerNorm(feat_dim))
+            else:
+                self.norm.append(nn.Identity())
+
+        # classifier
+        self.cls_head = MaskedConv1D(
+            feat_dim, num_classes, kernel_size,
+            stride=1, padding=kernel_size // 2
+        )
+
+        # use prior in model initialization
+        if prior_prob > 0:
+            bias_value = -(math.log((1 - prior_prob) / prior_prob))
+            torch.nn.init.constant_(self.cls_head.conv.bias, bias_value)
+
+        if len(empty_cls) > 0:
+            bias_value = -(math.log((1 - 1e-6) / 1e-6))
+            for idx in empty_cls:
+                torch.nn.init.constant_(self.cls_head.conv.bias[idx], bias_value)
+
+    def forward(self, fpn_feats, fpn_masks):
+        assert len(fpn_feats) == len(fpn_masks)
+
+        out_logits = tuple()
+        for _, (cur_feat, cur_mask) in enumerate(zip(fpn_feats, fpn_masks)):
+            # input projection
+            cur_out, _ = self.input_proj(cur_feat, cur_mask)
+            cur_out = self.act(self.input_norm(cur_out))
+
+            # deeper layers with skip connections (every 2 layers)
+            for idx in range(len(self.head)):
+                residual = cur_out
+                cur_out, _ = self.head[idx](cur_out, cur_mask)
+                cur_out = self.act(self.norm[idx](cur_out))
+                # skip connection every 2 layers
+                if idx % 2 == 1:
+                    cur_out = cur_out + residual
+
+            cur_logits, _ = self.cls_head(cur_out, cur_mask)
+            out_logits += (cur_logits,)
+
+        return out_logits
+
+
+class PtTransformerRegHeadv2(nn.Module):
+    """
+    Enhanced 1D Conv heads for regression with skip connections.
+    Deeper architecture with residual connections for better localization.
+    """
+    def __init__(
+        self,
+        input_dim,
+        feat_dim,
+        fpn_levels,
+        num_layers=4,
+        kernel_size=3,
+        act_layer=nn.ReLU,
+        with_ln=True
+    ):
+        super().__init__()
+        self.fpn_levels = fpn_levels
+        self.act = act_layer()
+        self.num_layers = num_layers
+
+        # input projection
+        self.input_proj = MaskedConv1D(
+            input_dim, feat_dim, 1, stride=1, padding=0, bias=(not with_ln)
+        )
+        self.input_norm = LayerNorm(feat_dim) if with_ln else nn.Identity()
+
+        # build the deeper head with skip connections
+        self.head = nn.ModuleList()
+        self.norm = nn.ModuleList()
+        for idx in range(num_layers - 1):
+            self.head.append(
+                MaskedConv1D(
+                    feat_dim, feat_dim, kernel_size,
+                    stride=1,
+                    padding=kernel_size // 2,
+                    bias=(not with_ln)
+                )
+            )
+            if with_ln:
+                self.norm.append(LayerNorm(feat_dim))
+            else:
+                self.norm.append(nn.Identity())
+
+        self.scale = nn.ModuleList()
+        for idx in range(fpn_levels):
+            self.scale.append(Scale())
+
+        # segment regression
+        self.offset_head = MaskedConv1D(
+            feat_dim, 2, kernel_size,
+            stride=1, padding=kernel_size // 2
+        )
+
+    def forward(self, fpn_feats, fpn_masks):
+        assert len(fpn_feats) == len(fpn_masks)
+        assert len(fpn_feats) == self.fpn_levels
+
+        out_offsets = tuple()
+        for l, (cur_feat, cur_mask) in enumerate(zip(fpn_feats, fpn_masks)):
+            # input projection
+            cur_out, _ = self.input_proj(cur_feat, cur_mask)
+            cur_out = self.act(self.input_norm(cur_out))
+
+            # deeper layers with skip connections
+            for idx in range(len(self.head)):
+                residual = cur_out
+                cur_out, _ = self.head[idx](cur_out, cur_mask)
+                cur_out = self.act(self.norm[idx](cur_out))
+                # skip connection every 2 layers
+                if idx % 2 == 1:
+                    cur_out = cur_out + residual
+
+            cur_offsets, _ = self.offset_head(cur_out, cur_mask)
+            out_offsets += (F.relu(self.scale[l](cur_offsets)),)
+
+        return out_offsets
 
 
 class PtTransformerRegHead(nn.Module):
@@ -190,7 +353,12 @@ class PtTransformer(nn.Module):
         use_rel_pe,            # if to use rel position encoding
         num_classes,           # number of action classes
         train_cfg,             # other cfg for training
-        test_cfg               # other cfg for testing
+        test_cfg,              # other cfg for testing
+        # v2 backbone options (for convTransformerv2)
+        use_rope=False,        # rotary position embeddings
+        use_flash_attn=False,  # flash attention
+        use_swiglu=False,      # SwiGLU FFN
+        use_rms_norm=False,    # RMSNorm
     ):
         super().__init__()
          # re-distribute params to backbone / neck / head
@@ -228,6 +396,13 @@ class PtTransformer(nn.Module):
         self.train_dropout = train_cfg['dropout']
         self.train_droppath = train_cfg['droppath']
         self.train_label_smoothing = train_cfg['label_smoothing']
+        self.train_reg_loss_type = train_cfg.get('reg_loss_type', 'diou')  # diou or eiou
+
+        # v2 backbone options
+        self.use_rope = use_rope
+        self.use_flash_attn = use_flash_attn
+        self.use_swiglu = use_swiglu
+        self.use_rms_norm = use_rms_norm
 
         # test time config
         self.test_pre_nms_thresh = test_cfg['pre_nms_thresh']
@@ -241,11 +416,37 @@ class PtTransformer(nn.Module):
         self.test_multiclass_nms = test_cfg['multiclass_nms']
         self.test_nms_sigma = test_cfg['nms_sigma']
         self.test_voting_thresh = test_cfg['voting_thresh']
+        self.test_score_temperature = test_cfg.get('score_temperature', 1.0)
+        self.test_use_diou_nms = test_cfg.get('use_diou_nms', False)
+        self.test_class_sigma = test_cfg.get('class_sigma', None)
 
         # we will need a better way to dispatch the params to backbones / necks
         # backbone network: conv + transformer
-        assert backbone_type in ['convTransformer', 'conv']
-        if backbone_type == 'convTransformer':
+        assert backbone_type in ['convTransformer', 'convTransformerv2', 'conv']
+        if backbone_type == 'convTransformerv2':
+            self.backbone = make_backbone(
+                'convTransformerv2',
+                **{
+                    'n_in' : input_dim,
+                    'n_embd' : embd_dim,
+                    'n_head': n_head,
+                    'n_embd_ks': embd_kernel_size,
+                    'max_len': max_seq_len,
+                    'arch' : backbone_arch,
+                    'mha_win_size': self.mha_win_size,
+                    'scale_factor' : scale_factor,
+                    'with_ln' : embd_with_ln,
+                    'attn_pdrop' : 0.0,
+                    'proj_pdrop' : self.train_dropout,
+                    'path_pdrop' : self.train_droppath,
+                    'use_abs_pe' : use_abs_pe,
+                    'use_rope' : self.use_rope,
+                    'use_flash_attn' : self.use_flash_attn,
+                    'use_swiglu' : self.use_swiglu,
+                    'use_rms_norm' : self.use_rms_norm,
+                }
+            )
+        elif backbone_type == 'convTransformer':
             self.backbone = make_backbone(
                 'convTransformer',
                 **{
@@ -575,12 +776,18 @@ class PtTransformer(nn.Module):
         if num_pos == 0:
             reg_loss = 0 * pred_offsets.sum()
         else:
-            # giou loss defined on positive samples
-            reg_loss = ctr_diou_loss_1d(
-                pred_offsets,
-                gt_offsets,
-                reduction='sum'
-            )
+            if self.train_reg_loss_type == 'eiou':
+                reg_loss = ctr_eiou_loss_1d(
+                    pred_offsets,
+                    gt_offsets,
+                    reduction='sum'
+                )
+            else:
+                reg_loss = ctr_diou_loss_1d(
+                    pred_offsets,
+                    gt_offsets,
+                    reduction='sum'
+                )
             reg_loss /= self.loss_normalizer
 
         if self.train_loss_weight > 0:
@@ -658,8 +865,8 @@ class PtTransformer(nn.Module):
         for cls_i, offsets_i, pts_i, mask_i in zip(
                 out_cls_logits, out_offsets, points, fpn_masks
             ):
-            # sigmoid normalization for output logits
-            pred_prob = (cls_i.sigmoid() * mask_i.unsqueeze(-1)).flatten()
+            scaled_logits = cls_i / self.test_score_temperature
+            pred_prob = (scaled_logits.sigmoid() * mask_i.unsqueeze(-1)).flatten()
 
             # Apply filtering to make NMS faster following detectron2
             # 1. Keep seg with confidence score > a threshold
@@ -733,7 +940,9 @@ class PtTransformer(nn.Module):
                     use_soft_nms = (self.test_nms_method == 'soft'),
                     multiclass = self.test_multiclass_nms,
                     sigma = self.test_nms_sigma,
-                    voting_thresh = self.test_voting_thresh
+                    voting_thresh = self.test_voting_thresh,
+                    use_diou_nms = self.test_use_diou_nms,
+                    class_sigma = self.test_class_sigma
                 )
             # 3: convert from feature grids to seconds
             if segs.shape[0] > 0:

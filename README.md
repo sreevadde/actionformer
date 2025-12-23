@@ -8,6 +8,7 @@
 |---------|-------------|------|
 | **Multi-GPU Training** | DDP, AMP, gradient accumulation | [Guide](docs/MULTI_GPU_TRAINING.md) |
 | **Transformer v2** | Flash Attention, RoPE, RMSNorm, SwiGLU | [Guide](docs/TRANSFORMER_V2.md) |
+| **Detection Quality** | EIoU, DIoU-NMS, temperature scaling | [Guide](docs/DETECTION_QUALITY.md) |
 | **Use Cases** | Configuration recommendations | [Guide](docs/USE_CASES.md) |
 
 ### Quick Start
@@ -46,6 +47,26 @@ model:
     use_flash_attn: true
     use_swiglu: true
     use_rms_norm: true
+```
+
+### Detection Quality Improvements
+
+| Component | Description | Benefit |
+|-----------|-------------|---------|
+| **EIoU Loss** | Enhanced IoU with aspect ratio penalty | Better convergence |
+| **QualityFocal Loss** | IoU-aware classification | Aligns confidence with localization |
+| **DIoU-NMS** | Distance-aware suppression | Better handling of overlapping events |
+| **Temperature Scaling** | Score calibration | Improved probability estimates |
+| **Class-specific NMS** | Per-class suppression params | Tailored for event types |
+| **Deeper Heads (v2)** | Skip connections | Better gradient flow |
+
+```yaml
+test_cfg:
+  use_diou_nms: true
+  score_temperature: 1.3
+  class_sigma:
+    0: 0.7  # short events
+    1: 0.4  # medium events
 ```
 
 ---

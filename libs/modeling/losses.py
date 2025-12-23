@@ -166,3 +166,266 @@ def ctr_diou_loss_1d(
         loss = loss.sum()
 
     return loss
+
+
+@torch.jit.script
+def ctr_eiou_loss_1d(
+    input_offsets: torch.Tensor,
+    target_offsets: torch.Tensor,
+    reduction: str = 'none',
+    eps: float = 1e-8,
+) -> torch.Tensor:
+    """
+    Enhanced IoU Loss (EIoU) for 1D temporal segments.
+    Extends DIoU with aspect ratio penalty for better convergence.
+
+    Reference: https://arxiv.org/abs/2101.08158
+
+    Args:
+        input/target_offsets (Tensor): 1D offsets of size (N, 2)
+        reduction: 'none' | 'mean' | 'sum'
+        eps (float): small number to prevent division by zero
+    """
+    input_offsets = input_offsets.float()
+    target_offsets = target_offsets.float()
+    assert (input_offsets >= 0.0).all(), "predicted offsets must be non-negative"
+    assert (target_offsets >= 0.0).all(), "GT offsets must be non-negative"
+
+    lp, rp = input_offsets[:, 0], input_offsets[:, 1]
+    lg, rg = target_offsets[:, 0], target_offsets[:, 1]
+
+    # intersection
+    lkis = torch.min(lp, lg)
+    rkis = torch.min(rp, rg)
+    intsctk = rkis + lkis
+
+    # union
+    unionk = (lp + rp) + (lg + rg) - intsctk
+    iouk = intsctk / unionk.clamp(min=eps)
+
+    # enclosing box
+    lc = torch.max(lp, lg)
+    rc = torch.max(rp, rg)
+    len_c = lc + rc
+
+    # center distance penalty (DIoU term)
+    rho = 0.5 * (rp - lp - rg + lg)
+    d2 = torch.square(rho)
+    c2 = torch.square(len_c).clamp(min=eps)
+
+    # aspect ratio penalty (EIoU term) - penalize duration differences
+    len_p = lp + rp
+    len_g = lg + rg
+    rho_w = torch.square(len_p - len_g)
+
+    # EIoU = IoU - d²/c² - ρ_w²/c²
+    loss = 1.0 - iouk + d2 / c2 + rho_w / c2
+
+    if reduction == "mean":
+        loss = loss.mean() if loss.numel() > 0 else 0.0 * loss.sum()
+    elif reduction == "sum":
+        loss = loss.sum()
+
+    return loss
+
+
+@torch.jit.script
+def quality_focal_loss(
+    inputs: torch.Tensor,
+    targets: torch.Tensor,
+    iou_targets: torch.Tensor,
+    alpha: float = 0.25,
+    gamma: float = 2.0,
+    reduction: str = "none",
+) -> torch.Tensor:
+    """
+    Quality Focal Loss - combines focal loss with IoU-aware quality signal.
+    Aligns classification confidence with localization quality.
+
+    Reference: https://arxiv.org/abs/2006.04388
+
+    Args:
+        inputs: Classification logits (N, C)
+        targets: Binary classification targets (N, C)
+        iou_targets: IoU quality scores for positive samples (N,)
+        alpha: Focal loss alpha parameter
+        gamma: Focal loss gamma parameter
+        reduction: 'none' | 'mean' | 'sum'
+    """
+    inputs = inputs.float()
+    targets = targets.float()
+    iou_targets = iou_targets.float()
+
+    p = torch.sigmoid(inputs)
+
+    # For positive samples, target becomes IoU quality
+    # For negative samples, target remains 0
+    quality_targets = targets * iou_targets.unsqueeze(-1).clamp(min=0.0, max=1.0)
+
+    # BCE with quality targets
+    ce_loss = F.binary_cross_entropy_with_logits(
+        inputs, quality_targets, reduction="none"
+    )
+
+    # Focal weight based on distance from quality target
+    focal_weight = torch.abs(quality_targets - p) ** gamma
+
+    # Alpha weighting
+    if alpha >= 0:
+        alpha_t = alpha * targets + (1 - alpha) * (1 - targets)
+        focal_weight = alpha_t * focal_weight
+
+    loss = focal_weight * ce_loss
+
+    if reduction == "mean":
+        loss = loss.mean()
+    elif reduction == "sum":
+        loss = loss.sum()
+
+    return loss
+
+
+@torch.jit.script
+def focal_regression_loss(
+    input_offsets: torch.Tensor,
+    target_offsets: torch.Tensor,
+    gamma: float = 2.0,
+    reduction: str = 'none',
+    eps: float = 1e-8,
+) -> torch.Tensor:
+    """
+    Focal Regression Loss - focuses on harder regression samples.
+    Downweights easy samples with high IoU, focuses on boundary cases.
+
+    Args:
+        input/target_offsets (Tensor): 1D offsets of size (N, 2)
+        gamma: Focusing parameter (higher = more focus on hard samples)
+        reduction: 'none' | 'mean' | 'sum'
+        eps (float): small number to prevent division by zero
+    """
+    input_offsets = input_offsets.float()
+    target_offsets = target_offsets.float()
+    assert (input_offsets >= 0.0).all(), "predicted offsets must be non-negative"
+    assert (target_offsets >= 0.0).all(), "GT offsets must be non-negative"
+
+    lp, rp = input_offsets[:, 0], input_offsets[:, 1]
+    lg, rg = target_offsets[:, 0], target_offsets[:, 1]
+
+    # intersection
+    lkis = torch.min(lp, lg)
+    rkis = torch.min(rp, rg)
+    intsctk = rkis + lkis
+
+    # union
+    unionk = (lp + rp) + (lg + rg) - intsctk
+    iouk = intsctk / unionk.clamp(min=eps)
+
+    # base loss (1 - IoU)
+    base_loss = 1.0 - iouk
+
+    # focal weight: focus on hard samples (low IoU)
+    focal_weight = (1.0 - iouk) ** gamma
+
+    loss = focal_weight * base_loss
+
+    if reduction == "mean":
+        loss = loss.mean() if loss.numel() > 0 else 0.0 * loss.sum()
+    elif reduction == "sum":
+        loss = loss.sum()
+
+    return loss
+
+
+@torch.jit.script
+def iou_weighted_loss_1d(
+    input_offsets: torch.Tensor,
+    target_offsets: torch.Tensor,
+    base_loss_type: str = 'diou',
+    reduction: str = 'none',
+    eps: float = 1e-8,
+) -> torch.Tensor:
+    """
+    IoU-Weighted Regression Loss - softer version of focal regression.
+    Weights loss by (1 - IoU) linearly, not exponentially.
+
+    Args:
+        input/target_offsets (Tensor): 1D offsets of size (N, 2)
+        base_loss_type: 'iou' | 'diou' | 'eiou' - which base loss to use
+        reduction: 'none' | 'mean' | 'sum'
+        eps (float): small number to prevent division by zero
+    """
+    input_offsets = input_offsets.float()
+    target_offsets = target_offsets.float()
+    assert (input_offsets >= 0.0).all(), "predicted offsets must be non-negative"
+    assert (target_offsets >= 0.0).all(), "GT offsets must be non-negative"
+
+    lp, rp = input_offsets[:, 0], input_offsets[:, 1]
+    lg, rg = target_offsets[:, 0], target_offsets[:, 1]
+
+    # intersection
+    lkis = torch.min(lp, lg)
+    rkis = torch.min(rp, rg)
+    intsctk = rkis + lkis
+
+    # union
+    unionk = (lp + rp) + (lg + rg) - intsctk
+    iouk = intsctk / unionk.clamp(min=eps)
+
+    # base loss is 1 - IoU
+    base_loss = 1.0 - iouk
+
+    if base_loss_type == 'diou' or base_loss_type == 'eiou':
+        # add center distance penalty
+        lc = torch.max(lp, lg)
+        rc = torch.max(rp, rg)
+        len_c = lc + rc
+        rho = 0.5 * (rp - lp - rg + lg)
+        d2 = torch.square(rho)
+        c2 = torch.square(len_c).clamp(min=eps)
+        base_loss = base_loss + d2 / c2
+
+        if base_loss_type == 'eiou':
+            # add width penalty
+            len_p = lp + rp
+            len_g = lg + rg
+            rho_w = torch.square(len_p - len_g)
+            base_loss = base_loss + rho_w / c2
+
+    weight = 2.0 - iouk
+
+    loss = weight * base_loss
+
+    if reduction == "mean":
+        loss = loss.mean() if loss.numel() > 0 else 0.0 * loss.sum()
+    elif reduction == "sum":
+        loss = loss.sum()
+
+    return loss
+
+
+def compute_iou_1d(
+    pred_offsets: torch.Tensor,
+    target_offsets: torch.Tensor,
+    eps: float = 1e-8,
+) -> torch.Tensor:
+    """
+    Compute IoU for 1D segments represented as center offsets.
+
+    Args:
+        pred_offsets: Predicted offsets (N, 2)
+        target_offsets: Target offsets (N, 2)
+
+    Returns:
+        IoU scores (N,)
+    """
+    lp, rp = pred_offsets[:, 0], pred_offsets[:, 1]
+    lg, rg = target_offsets[:, 0], target_offsets[:, 1]
+
+    lkis = torch.min(lp, lg)
+    rkis = torch.min(rp, rg)
+    intsctk = (rkis + lkis).clamp(min=0)
+
+    unionk = (lp + rp) + (lg + rg) - intsctk
+    iouk = intsctk / unionk.clamp(min=eps)
+
+    return iouk

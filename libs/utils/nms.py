@@ -1,6 +1,7 @@
 # Functions for 1D NMS, modified from:
 # https://github.com/open-mmlab/mmcv/blob/master/mmcv/ops/nms.py
 import torch
+from typing import Dict, Optional, Union
 
 import nms_1d_cpu
 
@@ -100,6 +101,138 @@ def seg_voting(nms_segs, all_segs, all_scores, iou_threshold, score_offset=1.5):
 
     return refined_segs
 
+
+def compute_diou_1d(segs1: torch.Tensor, segs2: torch.Tensor, eps: float = 1e-8) -> torch.Tensor:
+    """
+    Compute DIoU (Distance-IoU) matrix for 1D segments.
+
+    Args:
+        segs1: (N, 2) tensor of segments [start, end]
+        segs2: (M, 2) tensor of segments [start, end]
+
+    Returns:
+        (N, M) DIoU matrix
+    """
+    N, M = segs1.shape[0], segs2.shape[0]
+    if N == 0 or M == 0:
+        return torch.zeros((N, M), dtype=segs1.dtype, device=segs1.device)
+
+    # Expand for broadcasting: (N, 1, 2) and (1, M, 2)
+    segs1_exp = segs1[:, None, :]
+    segs2_exp = segs2[None, :, :]
+
+    # Intersection
+    left = torch.maximum(segs1_exp[:, :, 0], segs2_exp[:, :, 0])
+    right = torch.minimum(segs1_exp[:, :, 1], segs2_exp[:, :, 1])
+    inter = (right - left).clamp(min=0)
+
+    # Union
+    len1 = segs1_exp[:, :, 1] - segs1_exp[:, :, 0]
+    len2 = segs2_exp[:, :, 1] - segs2_exp[:, :, 0]
+    union = len1 + len2 - inter
+
+    # IoU
+    iou = inter / union.clamp(min=eps)
+
+    # Center distance
+    center1 = (segs1_exp[:, :, 0] + segs1_exp[:, :, 1]) / 2
+    center2 = (segs2_exp[:, :, 0] + segs2_exp[:, :, 1]) / 2
+    center_dist_sq = (center1 - center2) ** 2
+
+    # Enclosing segment
+    enc_left = torch.minimum(segs1_exp[:, :, 0], segs2_exp[:, :, 0])
+    enc_right = torch.maximum(segs1_exp[:, :, 1], segs2_exp[:, :, 1])
+    enc_diag_sq = (enc_right - enc_left) ** 2
+
+    # DIoU = IoU - d²/c²
+    diou = iou - center_dist_sq / enc_diag_sq.clamp(min=eps)
+
+    return diou
+
+
+def diou_soft_nms(
+    segs: torch.Tensor,
+    scores: torch.Tensor,
+    cls_idxs: torch.Tensor,
+    iou_threshold: float = 0.5,
+    sigma: float = 0.5,
+    min_score: float = 0.001,
+    max_num: int = -1,
+) -> tuple:
+    """
+    DIoU-based Soft-NMS implementation.
+    Uses DIoU instead of IoU for suppression, considering center distance.
+
+    Args:
+        segs: (N, 2) segments [start, end]
+        scores: (N,) confidence scores
+        cls_idxs: (N,) class indices
+        iou_threshold: IoU threshold (not used in soft-nms, kept for API compat)
+        sigma: Gaussian sigma for score decay
+        min_score: Minimum score threshold
+        max_num: Maximum detections to keep
+
+    Returns:
+        Tuple of (segs, scores, cls_idxs) after NMS
+    """
+    device = segs.device
+    segs = segs.cpu().clone()
+    scores = scores.cpu().clone()
+    cls_idxs = cls_idxs.cpu().clone()
+
+    N = segs.shape[0]
+    if N == 0:
+        return segs.to(device), scores.to(device), cls_idxs.to(device)
+
+    order = scores.argsort(descending=True)
+    segs = segs[order]
+    scores = scores[order]
+    cls_idxs = cls_idxs[order]
+
+    kept_segs = []
+    kept_scores = []
+    kept_cls = []
+
+    while segs.shape[0] > 0:
+        kept_segs.append(segs[0])
+        kept_scores.append(scores[0])
+        kept_cls.append(cls_idxs[0])
+
+        if segs.shape[0] == 1:
+            break
+
+        top_seg = segs[0:1]
+        rest_segs = segs[1:]
+        diou = compute_diou_1d(top_seg, rest_segs).squeeze(0)
+
+        diou_clamped = diou.clamp(min=0)
+        weight = torch.exp(-(diou_clamped ** 2) / sigma)
+        scores = scores[1:] * weight
+
+        valid = scores > min_score
+        segs = rest_segs[valid]
+        scores = scores[valid]
+        cls_idxs = cls_idxs[1:][valid]
+
+    if len(kept_segs) == 0:
+        return (
+            torch.zeros((0, 2), device=device),
+            torch.zeros(0, device=device),
+            torch.zeros(0, dtype=cls_idxs.dtype, device=device)
+        )
+
+    kept_segs = torch.stack(kept_segs)
+    kept_scores = torch.stack(kept_scores)
+    kept_cls = torch.stack(kept_cls)
+
+    if max_num > 0:
+        kept_segs = kept_segs[:max_num]
+        kept_scores = kept_scores[:max_num]
+        kept_cls = kept_cls[:max_num]
+
+    return kept_segs.to(device), kept_scores.to(device), kept_cls.to(device)
+
+
 def batched_nms(
     segs,
     scores,
@@ -111,28 +244,40 @@ def batched_nms(
     multiclass=True,
     sigma=0.5,
     voting_thresh=0.75,
+    use_diou_nms=False,
+    class_sigma: Optional[Dict[int, float]] = None,
 ):
-    # Based on Detectron2 implementation,
     num_segs = segs.shape[0]
-    # corner case, no prediction outputs
     if num_segs == 0:
         return torch.zeros([0, 2]),\
                torch.zeros([0,]),\
                torch.zeros([0,], dtype=cls_idxs.dtype)
 
     if multiclass:
-        # multiclass nms: apply nms on each class independently
         new_segs, new_scores, new_cls_idxs = [], [], []
         for class_id in torch.unique(cls_idxs):
             curr_indices = torch.where(cls_idxs == class_id)[0]
-            # soft_nms vs nms
-            if use_soft_nms:
+            curr_sigma = sigma
+            if class_sigma is not None and int(class_id.item()) in class_sigma:
+                curr_sigma = class_sigma[int(class_id.item())]
+
+            if use_diou_nms and use_soft_nms:
+                sorted_segs, sorted_scores, sorted_cls_idxs = diou_soft_nms(
+                    segs[curr_indices],
+                    scores[curr_indices],
+                    cls_idxs[curr_indices],
+                    iou_threshold,
+                    curr_sigma,
+                    min_score,
+                    max_seg_num
+                )
+            elif use_soft_nms:
                 sorted_segs, sorted_scores, sorted_cls_idxs = SoftNMSop.apply(
                     segs[curr_indices],
                     scores[curr_indices],
                     cls_idxs[curr_indices],
                     iou_threshold,
-                    sigma,
+                    curr_sigma,
                     min_score,
                     2,
                     max_seg_num
@@ -146,21 +291,22 @@ def batched_nms(
                     min_score,
                     max_seg_num
                 )
-            # disable seg voting for multiclass nms, no sufficient segs
 
-            # fill in the class index
             new_segs.append(sorted_segs)
             new_scores.append(sorted_scores)
             new_cls_idxs.append(sorted_cls_idxs)
 
-        # cat the results
         new_segs = torch.cat(new_segs)
         new_scores = torch.cat(new_scores)
         new_cls_idxs = torch.cat(new_cls_idxs)
 
     else:
-        # class agnostic
-        if use_soft_nms:
+        if use_diou_nms and use_soft_nms:
+            new_segs, new_scores, new_cls_idxs = diou_soft_nms(
+                segs, scores, cls_idxs, iou_threshold,
+                sigma, min_score, max_seg_num
+            )
+        elif use_soft_nms:
             new_segs, new_scores, new_cls_idxs = SoftNMSop.apply(
                 segs, scores, cls_idxs, iou_threshold,
                 sigma, min_score, 2, max_seg_num

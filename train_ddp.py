@@ -469,7 +469,7 @@ def main(args):
         )
         val_loader = torch.utils.data.DataLoader(
             val_dataset,
-            batch_size=cfg['loader']['batch_size'],
+            batch_size=1,  # Inference requires batch_size=1
             shuffle=False,
             num_workers=cfg['loader']['num_workers'],
             collate_fn=trivial_batch_collator,
@@ -496,7 +496,8 @@ def main(args):
 
     # Optimizer and scheduler
     optimizer = make_optimizer(model, cfg['opt'])
-    num_iters_per_epoch = len(train_loader)
+    # Scheduler steps per epoch = optimizer steps (accounting for accumulation)
+    num_iters_per_epoch = len(train_loader) // args.accum_steps
     scheduler = make_scheduler(optimizer, cfg['opt'], num_iters_per_epoch)
 
     # Model EMA (only on main process)

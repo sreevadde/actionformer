@@ -320,6 +320,7 @@ class MaskedMHAv2(nn.Module):
         self.n_embd = n_embd
         self.n_head = n_head
         self.n_kv_head = n_kv_head if n_kv_head is not None else n_head
+        assert n_head % self.n_kv_head == 0, f"n_head ({n_head}) must be divisible by n_kv_head ({self.n_kv_head})"
         self.n_channels = n_embd // n_head
         self.scale = 1.0 / math.sqrt(self.n_channels)
         self.use_rope = use_rope
@@ -367,12 +368,13 @@ class MaskedMHAv2(nn.Module):
             v = v.unsqueeze(2).expand(-1, -1, n_rep, -1, -1).reshape(B, self.n_head, T, -1)
 
         # Create attention mask for Flash Attention
-        # mask: (B, 1, T) bool -> attn_mask: (B, 1, T, T) or None
+        # mask: (B, 1, T) bool where True=valid, False=padding
+        # SDPA expects: bool mask True=DON'T attend, or float mask with -inf for masked
         if self.use_flash_attn:
-            # Flash attention with mask
+            # Expand mask and convert to float additive mask
+            # Valid positions (True) -> 0.0, Padding (False) -> -inf
             attn_mask = mask[:, :, None, :].expand(-1, -1, T, -1)  # (B, 1, T, T)
-            attn_mask = attn_mask.masked_fill(~attn_mask, float('-inf'))
-            attn_mask = attn_mask.masked_fill(attn_mask == True, 0.0)
+            attn_mask = torch.where(attn_mask, 0.0, float('-inf')).to(q.dtype)
 
             out = F.scaled_dot_product_attention(
                 q, k, v,

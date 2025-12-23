@@ -6,7 +6,7 @@ from torch.nn import functional as F
 
 from .models import register_meta_arch, make_backbone, make_neck, make_generator
 from .blocks import MaskedConv1D, Scale, LayerNorm
-from .losses import ctr_diou_loss_1d, ctr_eiou_loss_1d, sigmoid_focal_loss
+from .losses import ctr_diou_loss_1d, ctr_eiou_loss_1d, ctr_giou_loss_1d, sigmoid_focal_loss
 
 from ..utils import batched_nms
 
@@ -778,15 +778,15 @@ class PtTransformer(nn.Module):
         else:
             if self.train_reg_loss_type == 'eiou':
                 reg_loss = ctr_eiou_loss_1d(
-                    pred_offsets,
-                    gt_offsets,
-                    reduction='sum'
+                    pred_offsets, gt_offsets, reduction='sum'
                 )
-            else:
+            elif self.train_reg_loss_type in ('giou', 'iou'):
+                reg_loss = ctr_giou_loss_1d(
+                    pred_offsets, gt_offsets, reduction='sum'
+                )
+            else:  # diou (default)
                 reg_loss = ctr_diou_loss_1d(
-                    pred_offsets,
-                    gt_offsets,
-                    reduction='sum'
+                    pred_offsets, gt_offsets, reduction='sum'
                 )
             reg_loss /= self.loss_normalizer
 

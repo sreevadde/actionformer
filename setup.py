@@ -5,7 +5,7 @@ from torch.utils.cpp_extension import BuildExtension, CppExtension
 
 setup(
     name='actionformer',
-    version='1.0.2',
+    version='1.0.0',
     packages=find_packages(),
     ext_modules=[
         CppExtension(

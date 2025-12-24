@@ -1,6 +1,6 @@
 [project]
 name = "actionformer"
-version = "1.0.1"
+version = "1.0.2"
 description = "ActionFormer: Localizing Moments of Actions with Transformers"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -14,6 +14,7 @@ dependencies = [
     "tqdm>=4.65.0",
     "pandas>=1.5.0",
     "scipy>=1.10.0",
+    "joblib>=1.2.0",
 ]
 
 [build-system]

@@ -1,0 +1,84 @@
+# Snap Detection V7 - CORRECTED feature rate configuration
+# CRITICAL FIX: Features are 1/second, so fps=1, feat_stride=1
+# This makes segment_seconds map directly to feature_frame
+
+dataset_name: snap_v2
+train_split: ['training']
+val_split: ['validation']
+devices: [0, 1, 2, 3]
+init_rand_seed: 42
+
+dataset: {
+  json_file: /opt/dlami/nvme/fcv-snap/actionformer/annotations/snap_v5_single.json,
+  feat_folder: /opt/dlami/nvme/fcv-snap/actionformer/features_v2,
+  file_prefix: ~,
+  file_ext: .npy,
+  num_classes: 1,
+  input_dim: 1024,
+
+  # CORRECTED: Features are 1 per second
+  default_fps: 1,    # Override per-video fps since features are 1/sec
+  feat_stride: 1,    # 1 feature per second
+  num_frames: 1,     # Each feature represents 1 frame worth of embedding
+
+  trunc_thresh: 0.5,
+  crop_ratio: [0.9, 1.0],
+  max_seq_len: 512,
+}
+
+model: {
+  # Use original backbone (known to work)
+  backbone_type: convTransformer,
+  use_abs_pe: false,
+  use_rel_pe: false,
+
+  fpn_type: identity,
+  max_buffer_len_factor: 4.0,
+  n_mha_win_size: 9,
+  backbone_arch: [2, 2, 2],
+  scale_factor: 2,
+
+  # Regression ranges in FEATURE FRAMES (1 = 1 second)
+  # Snap events are ~2.5s duration, so ranges tuned accordingly
+  regression_range: [[0, 4], [4, 8], [8, 16]],
+
+  num_classes: 1,
+  embd_dim: 512,
+  fpn_dim: 512,
+  head_dim: 512,
+  head_num_layers: 3,
+}
+
+opt: {
+  learning_rate: 0.0004,
+  epochs: 50,
+  weight_decay: 0.05,
+  schedule_type: cosine,
+  warmup: True,
+  warmup_epochs: 5,
+}
+
+loader: {
+  batch_size: 16,
+  num_workers: 4,
+}
+
+train_cfg: {
+  init_loss_norm: 100,
+  clip_grad_l2norm: 1.0,
+  cls_prior_prob: 0.01,
+  center_sample: radius,
+  center_sample_radius: 1.5,
+}
+
+test_cfg: {
+  voting_thresh: 0.7,
+  pre_nms_topk: 200,
+  max_seg_num: 50,
+  min_score: 0.001,
+  multiclass_nms: True,
+  nms_sigma: 0.5,
+  iou_threshold: 0.1,
+}
+
+output_folder: ./ckpt/snap_v7/

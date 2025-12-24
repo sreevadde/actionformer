@@ -5,7 +5,7 @@ from torch.utils.cpp_extension import BuildExtension, CppExtension
 
 setup(
     name='actionformer',
-    version='1.0.0',
+    version='1.0.2',
     packages=find_packages(),
     ext_modules=[
         CppExtension(
@@ -26,5 +26,6 @@ setup(
         'tqdm>=4.65.0',
         'pandas>=1.5.0',
         'scipy>=1.10.0',
+        'joblib>=1.2.0',
     ],
 )

@@ -1,0 +1,82 @@
+# Snap Detection V5 - Single-class with v2 Transformer backbone
+# Uses: Flash Attention, RoPE, RMSNorm, SwiGLU for better performance
+
+dataset_name: snap_v2
+train_split: ['training']
+val_split: ['validation']
+devices: [0, 1, 2, 3]
+init_rand_seed: 42
+
+dataset: {
+  json_file: /opt/dlami/nvme/fcv-snap/actionformer/annotations/snap_v5_single.json,
+  feat_folder: /opt/dlami/nvme/fcv-snap/actionformer/features_v2,
+  file_prefix: ~,
+  file_ext: .npy,
+  num_classes: 1,  # Single class: snap only
+  input_dim: 1024,
+  feat_stride: 4,
+  num_frames: 16,
+  trunc_thresh: 0.5,
+  crop_ratio: [0.9, 1.0],
+  max_seq_len: 512,
+}
+
+model: {
+  # Use v2 backbone with modern optimizations
+  backbone_type: convTransformerv2,
+  use_rope: true,        # Rotary Position Embeddings
+  use_flash_attn: true,  # Flash Attention (2-4x faster)
+  use_swiglu: true,      # SwiGLU activation
+  use_rms_norm: true,    # RMSNorm (faster than LayerNorm)
+
+  fpn_type: identity,
+  max_buffer_len_factor: 4.0,
+  n_mha_win_size: 9,  # Must divide into max_seq_len properly
+  backbone_arch: [2, 2, 2],
+  scale_factor: 2,
+  regression_range: [[0, 4], [4, 8], [8, 16]],  # Match 3-level backbone
+
+  num_classes: 1,
+  embd_dim: 512,
+  fpn_dim: 512,
+  head_dim: 512,
+  head_num_layers: 3,
+}
+
+opt: {
+  learning_rate: 0.0002,  # Slightly lower for stability
+  epochs: 60,
+  weight_decay: 0.05,
+  schedule_type: cosine,
+  warmup: True,
+  warmup_epochs: 8,
+}
+
+loader: {
+  batch_size: 16,
+  num_workers: 4,
+}
+
+train_cfg: {
+  init_loss_norm: 100,
+  clip_grad_l2norm: 1.0,
+  cls_prior_prob: 0.01,
+  center_sample: radius,
+  center_sample_radius: 1.5,
+  reg_loss_type: eiou,       # EIoU for better handling of varied durations
+}
+
+test_cfg: {
+  voting_thresh: 0.7,
+  pre_nms_topk: 200,
+  max_seg_num: 50,
+  min_score: 0.001,
+  multiclass_nms: True,
+  nms_method: soft,
+  nms_sigma: 0.7,           # Higher for short/point events (snap)
+  iou_threshold: 0.1,
+  use_diou_nms: true,       # Distance-aware NMS
+  score_temperature: 1.3,   # Better probability calibration
+}
+
+output_folder: ./ckpt/snap_v5/

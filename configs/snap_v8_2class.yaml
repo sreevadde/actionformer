@@ -1,0 +1,100 @@
+# Snap Detection V8 - 2-Class (snap + oline_set) for Temporal Context
+#
+# Hypothesis: The oline_set class (O-Line stationary before snap) provides
+# temporal context that helps the model learn the pre-snap → snap transition.
+#
+# Classes:
+#   0: snap - ball snapped
+#   1: oline_set - O-Line stationary before snap (label_id 2 in annotations)
+#
+# Changes from V7b:
+#   - 2 classes instead of 1
+#   - 100 epochs (was 60)
+#   - Higher initial LR (0.0003 vs 0.0002)
+#   - Uses snap_v4 annotations (has oline_set)
+
+dataset_name: snap_v2
+train_split: ['training']
+val_split: ['validation']
+devices: [0, 1, 2, 3]
+init_rand_seed: 42
+
+dataset: {
+  json_file: /opt/dlami/nvme/fcv-snap/actionformer/annotations/snap_v8_2class.json,
+  feat_folder: /opt/dlami/nvme/fcv-snap/actionformer/features_v2,
+  file_prefix: ~,
+  file_ext: .npy,
+  num_classes: 2,  # snap + oline_set (filtering qb_has_ball)
+  input_dim: 1024,
+
+  # Identity conversion for feature-frame annotations
+  default_fps: 1,
+  feat_stride: 1,
+  num_frames: 1,
+
+  trunc_thresh: 0.5,
+  crop_ratio: [0.9, 1.0],
+  max_seq_len: 512,
+}
+
+model: {
+  backbone_type: convTransformerv2,
+  use_abs_pe: true,
+  use_rope: true,
+  use_flash_attn: true,
+  use_swiglu: true,
+  use_rms_norm: true,
+
+  fpn_type: identity,
+  max_buffer_len_factor: 4.0,
+  n_mha_win_size: 9,
+  backbone_arch: [2, 2, 2],
+  scale_factor: 2,
+
+  # Regression ranges - oline_set is longer segment (~7 feat frames)
+  regression_range: [[0, 4], [4, 8], [8, 16]],
+
+  num_classes: 2,
+  embd_dim: 512,
+  fpn_dim: 512,
+  head_dim: 512,
+  head_num_layers: 3,
+}
+
+opt: {
+  learning_rate: 0.0003,  # Slightly higher
+  epochs: 100,            # Longer training
+  weight_decay: 0.05,
+  schedule_type: cosine,
+  warmup: True,
+  warmup_epochs: 10,
+}
+
+loader: {
+  batch_size: 16,
+  num_workers: 4,
+}
+
+train_cfg: {
+  init_loss_norm: 100,
+  clip_grad_l2norm: 1.0,
+  cls_prior_prob: 0.01,
+  center_sample: radius,
+  center_sample_radius: 1.5,
+  reg_loss_type: eiou,
+}
+
+test_cfg: {
+  voting_thresh: 0.7,
+  pre_nms_topk: 200,
+  max_seg_num: 50,
+  min_score: 0.001,
+  multiclass_nms: True,
+  nms_method: soft,
+  nms_sigma: 0.7,
+  iou_threshold: 0.1,
+  use_diou_nms: true,
+  score_temperature: 1.0,
+}
+
+output_folder: ./ckpt/snap_v8_2class/

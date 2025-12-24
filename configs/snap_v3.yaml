@@ -1,0 +1,62 @@
+# Snap Detection V3 Config - Corrected frame_diff conversion (×5.9)
+# Training on 2025 data with proper 10fps→59fps conversion
+
+dataset_name: snap_v2  # Uses snap_v2 dataset loader, but with v3 annotations
+train_split: ['training']
+val_split: ['validation']
+devices: [0]
+init_rand_seed: 42
+
+dataset: {
+  json_file: /opt/dlami/nvme/fcv-snap/actionformer/annotations/snap_v3.json,
+  feat_folder: /opt/dlami/nvme/fcv-snap/actionformer/features_v2,
+  file_prefix: ~,
+  file_ext: .npy,
+  num_classes: 2,
+  input_dim: 1024,
+  feat_stride: 4,
+  num_frames: 16,
+  trunc_thresh: 0.5,
+  crop_ratio: [0.9, 1.0],
+  max_seq_len: 512,
+}
+
+model: {
+  fpn_type: identity,
+  max_buffer_len_factor: 4.0,
+  n_mha_win_size: 9,
+  backbone_arch: [2, 2, 2],
+  scale_factor: 2,
+  regression_range: [[0, 4], [4, 8], [8, 16]],
+}
+
+opt: {
+  learning_rate: 0.0001,
+  epochs: 50,
+  weight_decay: 0.05,
+}
+
+loader: {
+  batch_size: 16,
+  num_workers: 8,
+}
+
+train_cfg: {
+  init_loss_norm: 100,
+  clip_grad_l2norm: 1.0,
+  cls_prior_prob: 0.01,
+  center_sample: radius,
+  center_sample_radius: 1.5,
+}
+
+test_cfg: {
+  voting_thresh: 0.7,
+  pre_nms_topk: 200,
+  max_seg_num: 50,
+  min_score: 0.001,
+  multiclass_nms: True,
+  nms_sigma: 0.5,
+  iou_threshold: 0.1,
+}
+
+output_folder: ./ckpt/snap_v3/

@@ -429,3 +429,39 @@ def compute_iou_1d(
     iouk = intsctk / unionk.clamp(min=eps)
 
     return iouk
+
+
+@torch.jit.script
+def gaussian_focal_loss(
+    inputs: torch.Tensor,
+    targets: torch.Tensor,
+    alpha: float = 2.0,
+    gamma: float = 4.0,
+) -> torch.Tensor:
+    """
+    Gaussian Focal Loss for heatmap regression (CornerNet style).
+
+    Args:
+        inputs: Logits before sigmoid
+        targets: Gaussian heatmap targets (peaks = 1.0)
+        alpha: Focal modulating factor
+        gamma: Negative sample weighting factor
+    """
+    pred = torch.sigmoid(inputs)
+    pos_inds = targets.eq(1)
+    neg_inds = targets.lt(1)
+
+    neg_weights = torch.pow(1 - targets, gamma)
+    pos_loss = torch.log(pred.clamp(min=1e-12)) * torch.pow(1 - pred, alpha) * pos_inds
+    neg_loss = torch.log((1 - pred).clamp(min=1e-12)) * torch.pow(pred, alpha) * neg_weights * neg_inds
+
+    num_pos = pos_inds.float().sum()
+    pos_loss = pos_loss.sum()
+    neg_loss = neg_loss.sum()
+
+    if num_pos == 0:
+        loss = -neg_loss
+    else:
+        loss = -(pos_loss + neg_loss) / num_pos
+
+    return loss

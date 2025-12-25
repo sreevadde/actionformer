@@ -6,7 +6,7 @@ from torch.nn import functional as F
 
 from .models import register_meta_arch, make_backbone, make_neck, make_generator
 from .blocks import MaskedConv1D, Scale, LayerNorm
-from .losses import ctr_diou_loss_1d, ctr_eiou_loss_1d, ctr_giou_loss_1d, sigmoid_focal_loss
+from .losses import ctr_diou_loss_1d, ctr_eiou_loss_1d, ctr_giou_loss_1d, sigmoid_focal_loss, gaussian_focal_loss
 
 from ..utils import batched_nms
 
@@ -960,3 +960,239 @@ class PtTransformer(nn.Module):
             )
 
         return processed_results
+
+
+class PtTransformerHeatmapHead(nn.Module):
+    """
+    1D Conv head for heatmap regression (Sigmoid output)
+    """
+    def __init__(
+        self,
+        input_dim,
+        feat_dim,
+        num_layers=3,
+        kernel_size=3,
+        act_layer=nn.ReLU,
+        with_ln=False
+    ):
+        super().__init__()
+        self.act = act_layer()
+
+        # build the head
+        self.head = nn.ModuleList()
+        self.norm = nn.ModuleList()
+        for idx in range(num_layers-1):
+            if idx == 0:
+                in_dim = input_dim
+                out_dim = feat_dim
+            else:
+                in_dim = feat_dim
+                out_dim = feat_dim
+            self.head.append(
+                MaskedConv1D(
+                    in_dim, out_dim, kernel_size,
+                    stride=1,
+                    padding=kernel_size//2,
+                    bias=(not with_ln)
+                )
+            )
+            if with_ln:
+                self.norm.append(LayerNorm(out_dim))
+            else:
+                self.norm.append(nn.Identity())
+
+        # heatmap predictor (1 channel output)
+        self.heatmap_head = MaskedConv1D(
+                feat_dim, 1, kernel_size,
+                stride=1, padding=kernel_size//2,
+                bias=True
+            )
+        
+        # init bias for focal loss stability (approx prob 0.01)
+        prior_prob = 0.01
+        bias_value = -(math.log((1 - prior_prob) / prior_prob))
+        torch.nn.init.constant_(self.heatmap_head.conv.bias, bias_value)
+
+    def forward(self, fpn_feats, fpn_masks):
+        assert len(fpn_feats) == len(fpn_masks)
+
+        # apply the head for each pyramid level
+        out_heatmaps = tuple()
+        for _, (cur_feat, cur_mask) in enumerate(zip(fpn_feats, fpn_masks)):
+            cur_out = cur_feat
+            for idx in range(len(self.head)):
+                cur_out, _ = self.head[idx](cur_out, cur_mask)
+                cur_out = self.act(self.norm[idx](cur_out))
+            cur_heatmap, _ = self.heatmap_head(cur_out, cur_mask)
+            out_heatmaps += (cur_heatmap, )
+
+        return out_heatmaps
+
+
+@register_meta_arch("SnapFormer")
+class SnapFormer(PtTransformer):
+    """
+    SnapFormer: ActionFormer adapted for Point Detection via Heatmaps.
+    Inherits from PtTransformer but uses HeatmapHead and Gaussian Focal Loss.
+    """
+    def __init__(self, **kwargs):
+        # Initialize standard PtTransformer
+        super().__init__(**kwargs)
+        
+        # Override heads with Heatmap Head
+        # Use existing config params for head dimensions
+        self.heatmap_head = PtTransformerHeatmapHead(
+            self.neck.out_channel, 
+            kwargs['head_dim'],
+            num_layers=kwargs['head_num_layers'],
+            kernel_size=kwargs['head_kernel_size'],
+            with_ln=kwargs['head_with_ln']
+        )
+        
+        self.cls_head = None
+        self.reg_head = None
+        self.point_generator = None
+
+    def forward(self, video_list):
+        # batch the video list into feats (B, C, T) and masks (B, 1, T)
+        batched_inputs, batched_masks = self.preprocessing(video_list)
+
+        # forward the network (backbone -> neck -> heads)
+        feats, masks = self.backbone(batched_inputs, batched_masks)
+        fpn_feats, fpn_masks = self.neck(feats, masks)
+
+        # out_heatmap: List[B, 1, T_i]
+        out_heatmaps = self.heatmap_head(fpn_feats, fpn_masks)
+
+        if self.training:
+            # Generate Gaussian targets
+            gt_heatmaps = self.label_heatmaps(
+                video_list, fpn_feats, fpn_masks
+            )
+            
+            # Compute Gaussian Focal Loss
+            losses = self.losses(out_heatmaps, gt_heatmaps, fpn_masks)
+            return losses
+
+        else:
+            # Inference: Find peaks
+            results = self.inference_heatmap(
+                video_list, out_heatmaps, fpn_masks
+            )
+            return results
+
+    @torch.no_grad()
+    def label_heatmaps(self, video_list, fpn_feats, fpn_masks):
+        """
+        Generate Gaussian heatmap targets for each FPN level.
+        """
+        gt_heatmaps = []
+        for level_idx, (feat, mask) in enumerate(zip(fpn_feats, fpn_masks)):
+            # feat: B, C, T_level
+            stride = self.fpn_strides[level_idx]
+            B, _, T = feat.shape
+            
+            level_targets = []
+            
+            for batch_idx, video in enumerate(video_list):
+                # Init zero heatmap: 1, T
+                target = feat.new_zeros((1, T))
+                
+                # Handle missing or empty segments (negative samples)
+                segments = video.get('segments', None)
+                if segments is None or len(segments) == 0:
+                    level_targets.append(target)
+                    continue
+
+                # Move segments to same device as feature for calculation
+                segments = segments.to(feat.device)
+                
+                # In SnapFormer spec: Center = Mid-frame. Width = Duration.
+                centers = (segments[:, 0] + segments[:, 1]) / 2.0
+                durations = segments[:, 1] - segments[:, 0]
+                
+                # Map to current level coordinates
+                centers_level = centers / stride
+                durations_level = durations / stride
+                
+                for c, d in zip(centers_level, durations_level):
+                    # Gaussian Splatting
+                    # Use .item() to avoid "Boolean value of Tensor is ambiguous"
+                    d_val = d.item()
+                    c_val = c.item()
+                    
+                    # sigma = duration / 6 (so 3 sigma covers [-duration/2, duration/2])
+                    sigma = max(d_val / 6.0, 1.0) # min sigma 1.0
+                    
+                    # Range to update
+                    start = int(max(0, c_val - 3 * sigma))
+                    end = int(min(T, c_val + 3 * sigma + 1))
+                    
+                    if start >= end:
+                        continue
+
+                    t_indices = torch.arange(start, end, device=feat.device)
+                    delta = t_indices.float() - c_val
+                    gaussian = torch.exp(-(delta ** 2) / (2 * sigma ** 2))
+                    target[0, t_indices] = torch.maximum(target[0, t_indices], gaussian)
+
+                    # Force peak at nearest integer center
+                    nearest_idx = int(round(c_val))
+                    if 0 <= nearest_idx < T:
+                        target[0, nearest_idx] = 1.0
+                
+                level_targets.append(target)
+            
+            gt_heatmaps.append(torch.stack(level_targets))
+            
+        return gt_heatmaps
+
+    def losses(self, out_heatmaps, gt_heatmaps, fpn_masks):
+        loss = out_heatmaps[0].new_tensor(0.0)
+        for pred, target, mask in zip(out_heatmaps, gt_heatmaps, fpn_masks):
+            valid_pred = pred[mask.bool()]
+            valid_target = target[mask.bool()]
+            if valid_pred.numel() > 0:
+                loss += gaussian_focal_loss(valid_pred, valid_target)
+                
+        return {'heatmap_loss': loss}
+
+    def inference_heatmap(self, video_list, out_heatmaps, fpn_masks):
+        pred_sigmoid = torch.sigmoid(out_heatmaps[0])
+        results = []
+
+        for i, video in enumerate(video_list):
+            heatmap = pred_sigmoid[i, 0]
+            mask = fpn_masks[0][i, 0]
+            valid_heatmap = heatmap[mask.bool()]
+
+            # Peak detection (local maxima above threshold)
+            padded = F.pad(valid_heatmap, (1, 1), value=0)
+            is_peak = (valid_heatmap > padded[:-2]) & (valid_heatmap > padded[2:])
+            is_high = valid_heatmap > self.test_min_score
+
+            peaks_idx = torch.nonzero(is_peak & is_high, as_tuple=False)
+            if peaks_idx.numel() == 0:
+                peaks_idx = peaks_idx.reshape(-1)
+                peaks_score = valid_heatmap.new_empty(0)
+                peaks_time = valid_heatmap.new_empty(0)
+            else:
+                peaks_idx = peaks_idx.squeeze(-1)
+                peaks_score = valid_heatmap[peaks_idx]
+                peaks_time = peaks_idx.float() * self.fpn_strides[0]
+
+            if peaks_time.numel() == 0:
+                segments = peaks_time.new_empty((0, 2))
+            else:
+                segments = torch.stack((peaks_time, peaks_time), dim=1)
+
+            results.append({
+                'video_id': video['video_id'],
+                'fps': video.get('fps', 1.0),
+                'duration': video.get('duration', 1.0),
+                'segments': segments.cpu(),
+                'labels': torch.zeros(peaks_idx.numel(), dtype=torch.long),
+                'scores': peaks_score.cpu()
+            })
+
+        return results

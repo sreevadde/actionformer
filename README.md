@@ -9,6 +9,7 @@
 | **Multi-GPU Training** | DDP, AMP, gradient accumulation | [Guide](docs/MULTI_GPU_TRAINING.md) |
 | **Transformer v2** | Flash Attention, RoPE, RMSNorm, SwiGLU | [Guide](docs/TRANSFORMER_V2.md) |
 | **Detection Quality** | EIoU, DIoU-NMS, temperature scaling | [Guide](docs/DETECTION_QUALITY.md) |
+| **SnapFormer** | Heatmap-based point detection for instant events | [Config](#snapformer-point-detection) |
 | **Framework Utils** | Config validation, adaptive ranges, post-processing | [Guide](docs/FRAMEWORK_IMPROVEMENTS.md) |
 | **Use Cases** | Configuration recommendations | [Guide](docs/USE_CASES.md) |
 
@@ -68,6 +69,34 @@ test_cfg:
   class_sigma:
     0: 0.7  # short events
     1: 0.4  # medium events
+```
+
+### SnapFormer (Point Detection)
+
+For detecting **instant/point events** (e.g., snap detection in football, keystroke detection), SnapFormer uses heatmap regression instead of segment boundary regression.
+
+| Component | Description |
+|-----------|-------------|
+| **Gaussian Heatmap** | Targets are Gaussian peaks centered at event frames |
+| **Focal Loss** | CornerNet-style focal loss for class imbalance |
+| **Cross-Scale FPN** | Bidirectional PANet-style feature fusion |
+| **Peak Detection** | Inference via local maxima finding |
+
+**When to use SnapFormer vs ActionFormer:**
+- **SnapFormer**: Events with near-zero duration (snaps, clicks, impacts)
+- **ActionFormer**: Events with meaningful duration (diving, running, speaking)
+
+```yaml
+# SnapFormer config for point detection
+model:
+  meta_arch: "SnapFormer"
+  fpn_type: "cs_fpn"          # Cross-scale FPN (bidirectional)
+  # ... other params same as ActionFormer
+
+# Standard ActionFormer for segment detection
+model:
+  meta_arch: "LocPointTransformer"
+  fpn_type: "fpn"             # Standard top-down FPN
 ```
 
 ### Framework Utilities

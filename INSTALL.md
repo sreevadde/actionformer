@@ -51,14 +51,14 @@ pip install numpy pyyaml pandas h5py joblib tensorboard
 pip install flash-attn --no-build-isolation
 ```
 
-### 5. Compile NMS Extension
+### 5. Install ActionFormer
 ```bash
-cd ./libs/utils
-python setup.py install --user
-cd ../..
+pip install .
+# Or for development
+pip install -e .
 ```
 
-The NMS extension must be recompiled when PyTorch is updated.
+This compiles the NMS extension automatically. Reinstall when PyTorch is updated.
 
 ## Feature Compatibility
 
@@ -74,7 +74,7 @@ The NMS extension must be recompiled when PyTorch is updated.
 
 ```bash
 python -c "import torch; print(f'PyTorch {torch.__version__}, CUDA {torch.cuda.is_available()}')"
-python -c "from libs.utils import batched_nms; print('NMS compiled successfully')"
+python -c "from actionformer import batched_nms; print('NMS compiled successfully')"
 ```
 
 For v2 features:

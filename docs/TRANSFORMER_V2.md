@@ -306,7 +306,7 @@ use_swiglu: true
 
 ```python
 # Check if available
-from libs.modeling.blocks import HAS_FLASH_ATTN
+from actionformer.modeling.blocks import HAS_FLASH_ATTN
 print(f"Flash Attention available: {HAS_FLASH_ATTN}")
 
 # Requires PyTorch 2.0+

@@ -17,10 +17,10 @@ import torch.nn as nn
 import torch.utils.data
 from torch.utils.tensorboard import SummaryWriter
 
-from libs.core import load_config
-from libs.datasets import make_dataset, make_data_loader
-from libs.modeling import make_meta_arch
-from libs.utils import (
+from actionformer.core import load_config
+from actionformer.datasets import make_dataset, make_data_loader
+from actionformer.modeling import make_meta_arch
+from actionformer.utils import (
     train_one_epoch, valid_one_epoch, ANETdetection,
     save_checkpoint, make_optimizer, make_scheduler,
     fix_random_seed, ModelEma

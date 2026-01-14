@@ -5,7 +5,7 @@ Utilities for configuration validation, regression range computation, and post-p
 ## Configuration Validation
 
 ```python
-from libs.core import validate_config, ConfigurationError
+from actionformer import validate_config, ConfigurationError
 
 cfg = load_config(args.config)
 try:
@@ -35,7 +35,7 @@ validate_config(cfg, strict=False)
 Compute regression ranges from annotation duration distribution.
 
 ```python
-from libs.core import compute_adaptive_ranges
+from actionformer import compute_adaptive_ranges
 
 # From ActivityNet-format JSON
 ranges = compute_adaptive_ranges(
@@ -67,13 +67,13 @@ ranges = compute_adaptive_ranges(
 ### CLI Usage
 
 ```bash
-python -m libs.core.regression_ranges data/annotations.json --num-levels 6 --fps 30.0
+python -m actionformer.core.regression_ranges data/annotations.json --num-levels 6 --fps 30.0
 ```
 
 ## Loss Logger
 
 ```python
-from libs.utils import LossLogger, compute_iou_stats
+from actionformer import LossLogger, compute_iou_stats
 
 loss_logger = LossLogger(window_size=100)
 
@@ -96,7 +96,7 @@ for step, batch in enumerate(dataloader):
 Post-process detections to enforce temporal rules.
 
 ```python
-from libs.utils import TemporalConstraints, enforce_class_constraints
+from actionformer import TemporalConstraints, enforce_class_constraints
 
 # Generic constraints
 constraints = TemporalConstraints(
@@ -115,7 +115,7 @@ filtered = enforce_class_constraints(
 )
 
 # Merge close detections
-from libs.utils import merge_close_detections
+from actionformer import merge_close_detections
 merged = merge_close_detections(results, merge_gap=0.5, class_id=0)
 ```
 

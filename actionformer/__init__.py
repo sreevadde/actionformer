@@ -1,10 +1,102 @@
-"""
-ActionFormer CLI tools.
+__version__ = "1.4.0"
 
-Entry points:
-    actionformer-train      Single GPU training
-    actionformer-train-ddp  Multi-GPU DDP training
-    actionformer-eval       Evaluation
-"""
+from .core import (
+    load_config,
+    load_default_config,
+    ConfigValidator,
+    ConfigurationError,
+    validate_config,
+    compute_adaptive_ranges,
+    suggest_config_ranges,
+)
+from .modeling import (
+    make_meta_arch,
+    make_backbone,
+    make_neck,
+    make_generator,
+    MaskedConv1D,
+    MaskedMHCA,
+    MaskedMHA,
+    LayerNorm,
+    RMSNorm,
+    TransformerBlock,
+    ConvBlock,
+    Scale,
+    AffineDropPath,
+)
+from .datasets import (
+    make_dataset,
+    make_data_loader,
+    worker_init_reset_seed,
+    truncate_feats,
+)
+from .utils import (
+    make_optimizer,
+    make_scheduler,
+    save_checkpoint,
+    train_one_epoch,
+    valid_one_epoch,
+    fix_random_seed,
+    ModelEma,
+    AverageMeter,
+    ANETdetection,
+    batched_nms,
+    postprocess_results,
+    remove_duplicate_annotations,
+    LossLogger,
+    compute_loss_breakdown,
+    compute_iou_stats,
+    TemporalConstraints,
+    enforce_class_constraints,
+    merge_close_detections,
+)
 
-__version__ = "1.3.1"
+__all__ = [
+    "__version__",
+    # core
+    "load_config",
+    "load_default_config",
+    "ConfigValidator",
+    "ConfigurationError",
+    "validate_config",
+    "compute_adaptive_ranges",
+    "suggest_config_ranges",
+    # modeling
+    "make_meta_arch",
+    "make_backbone",
+    "make_neck",
+    "make_generator",
+    "MaskedConv1D",
+    "MaskedMHCA",
+    "MaskedMHA",
+    "LayerNorm",
+    "RMSNorm",
+    "TransformerBlock",
+    "ConvBlock",
+    "Scale",
+    "AffineDropPath",
+    # datasets
+    "make_dataset",
+    "make_data_loader",
+    "worker_init_reset_seed",
+    "truncate_feats",
+    # utils
+    "make_optimizer",
+    "make_scheduler",
+    "save_checkpoint",
+    "train_one_epoch",
+    "valid_one_epoch",
+    "fix_random_seed",
+    "ModelEma",
+    "AverageMeter",
+    "ANETdetection",
+    "batched_nms",
+    "postprocess_results",
+    "remove_duplicate_annotations",
+    "LossLogger",
+    "compute_loss_breakdown",
+    "compute_iou_stats",
+    "TemporalConstraints",
+    "enforce_class_constraints",
+    "merge_close_detections",
+]

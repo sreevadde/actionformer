@@ -5,12 +5,12 @@ from torch.utils.cpp_extension import BuildExtension, CppExtension
 
 setup(
     name='actionformer',
-    version='1.0.0',
+    version='1.4.0',
     packages=find_packages(),
     ext_modules=[
         CppExtension(
             name='nms_1d_cpu',
-            sources=['libs/utils/csrc/nms_cpu.cpp'],
+            sources=['actionformer/utils/csrc/nms_cpu.cpp'],
             extra_compile_args=['-fopenmp']
         )
     ],

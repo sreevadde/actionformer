@@ -138,8 +138,7 @@ model:
 | **Temporal Constraints** | Post-process with min gap, duration limits, overlap rules |
 
 ```python
-from libs.core import validate_config, compute_adaptive_ranges
-from libs.utils import TemporalConstraints
+from actionformer import validate_config, compute_adaptive_ranges, TemporalConstraints
 
 validate_config(cfg)  # Raises on invalid config
 ranges = compute_adaptive_ranges('annotations.json', num_levels=6)

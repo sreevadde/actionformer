@@ -15,13 +15,13 @@ def test_imports():
     print("Testing imports...")
     print("=" * 60)
 
-    from libs.modeling.blocks import (
+    from actionformer.modeling.blocks import (
         RMSNorm, SwiGLU, RotaryPositionEmbedding,
         MaskedMHAv2, TransformerBlockv2,
         LayerNorm, TransformerBlock,
         HAS_FLASH_ATTN
     )
-    from libs.modeling.backbones import ConvTransformerBackbonev2
+    from actionformer.modeling.backbones import ConvTransformerBackbonev2
 
     print(f"  RMSNorm: OK")
     print(f"  SwiGLU: OK")
@@ -40,7 +40,7 @@ def test_rmsnorm():
     print("Testing RMSNorm...")
     print("=" * 60)
 
-    from libs.modeling.blocks import RMSNorm, LayerNorm
+    from actionformer.modeling.blocks import RMSNorm, LayerNorm
 
     B, C, T = 4, 256, 512
     x = torch.randn(B, C, T).cuda()
@@ -82,7 +82,7 @@ def test_swiglu():
     print("Testing SwiGLU FFN...")
     print("=" * 60)
 
-    from libs.modeling.blocks import SwiGLU
+    from actionformer.modeling.blocks import SwiGLU
 
     B, C, T = 4, 256, 512
     x = torch.randn(B, C, T).cuda()
@@ -136,7 +136,7 @@ def test_rope():
     print("Testing RoPE...")
     print("=" * 60)
 
-    from libs.modeling.blocks import RotaryPositionEmbedding, apply_rotary_pos_emb
+    from actionformer.modeling.blocks import RotaryPositionEmbedding, apply_rotary_pos_emb
 
     B, nh, T, hs = 4, 8, 512, 64
 
@@ -168,7 +168,7 @@ def test_flash_attention():
     print("Testing Flash Attention...")
     print("=" * 60)
 
-    from libs.modeling.blocks import MaskedMHAv2, MaskedMHA, HAS_FLASH_ATTN
+    from actionformer.modeling.blocks import MaskedMHAv2, MaskedMHA, HAS_FLASH_ATTN
 
     if not HAS_FLASH_ATTN:
         print("  Flash Attention not available (requires PyTorch 2.0+)")
@@ -233,7 +233,7 @@ def test_transformer_block():
     print("Testing TransformerBlock v1 vs v2...")
     print("=" * 60)
 
-    from libs.modeling.blocks import TransformerBlock, TransformerBlockv2
+    from actionformer.modeling.blocks import TransformerBlock, TransformerBlockv2
 
     B, C, T = 4, 256, 512
     x = torch.randn(B, C, T).cuda()
@@ -301,7 +301,7 @@ def test_backbone():
     print("Testing Backbone v1 vs v2...")
     print("=" * 60)
 
-    from libs.modeling.backbones import ConvTransformerBackbone, ConvTransformerBackbonev2
+    from actionformer.modeling.backbones import ConvTransformerBackbone, ConvTransformerBackbonev2
 
     B, C, T = 2, 2048, 256
     x = torch.randn(B, C, T).cuda()

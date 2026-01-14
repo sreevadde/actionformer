@@ -20,7 +20,7 @@ The detection quality improvements include:
 Extends DIoU with an aspect ratio penalty for better convergence on events of varying durations.
 
 ```python
-from libs.modeling.losses import ctr_eiou_loss_1d
+from actionformer.modeling.losses import ctr_eiou_loss_1d
 
 loss = ctr_eiou_loss_1d(pred_offsets, target_offsets, reduction='mean')
 ```
@@ -42,7 +42,7 @@ loss = ctr_eiou_loss_1d(pred_offsets, target_offsets, reduction='mean')
 Aligns classification confidence with localization quality. Classification target becomes IoU score for positives.
 
 ```python
-from libs.modeling.losses import quality_focal_loss, compute_iou_1d
+from actionformer.modeling.losses import quality_focal_loss, compute_iou_1d
 
 # Compute IoU between predictions and targets
 iou_scores = compute_iou_1d(pred_offsets, target_offsets)
@@ -64,7 +64,7 @@ cls_loss = quality_focal_loss(
 Focuses training on hard regression samples (low IoU predictions).
 
 ```python
-from libs.modeling.losses import focal_regression_loss
+from actionformer.modeling.losses import focal_regression_loss
 
 loss = focal_regression_loss(
     pred_offsets, target_offsets,
@@ -145,7 +145,7 @@ Enhanced detection heads with 4-5 layers and residual connections.
 
 ```python
 # Use v2 heads in your model
-from libs.modeling.meta_archs import PtTransformerClsHeadv2, PtTransformerRegHeadv2
+from actionformer.modeling.meta_archs import PtTransformerClsHeadv2, PtTransformerRegHeadv2
 
 cls_head = PtTransformerClsHeadv2(
     input_dim=256,
@@ -278,11 +278,11 @@ Typical improvements on TAD benchmarks:
 For most cases, use **EIoU** or **IoU-Weighted** loss:
 ```python
 # Stable option - mild focus on hard samples
-from libs.modeling.losses import iou_weighted_loss_1d
+from actionformer.modeling.losses import iou_weighted_loss_1d
 reg_loss = iou_weighted_loss_1d(pred, gt, base_loss_type='eiou')
 
 # Or standard EIoU without weighting
-from libs.modeling.losses import ctr_eiou_loss_1d
+from actionformer.modeling.losses import ctr_eiou_loss_1d
 reg_loss = ctr_eiou_loss_1d(pred, gt)
 ```
 
